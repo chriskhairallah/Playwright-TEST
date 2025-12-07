@@ -37,7 +37,7 @@ export default defineConfig({
   // Shared settings for all projects
   use: {
     // Base URL - REPLACE THIS WITH YOUR ACTUAL WEBSITE URL
-    baseURL: 'https://myshop.com', // TODO: CHANGE THIS TO YOUR SITECORE WEBSITE URL
+    baseURL: 'https://www.kerastase.ca', // TODO: CHANGE THIS TO YOUR SITECORE WEBSITE URL
     
     // Take screenshot on failure
     screenshot: 'only-on-failure',
