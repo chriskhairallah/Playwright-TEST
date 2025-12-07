@@ -1,0 +1,229 @@
+name: Manual Test Execution - Sitecore Website
+
+# This workflow allows non-technical team members to manually trigger tests
+# and receive email notifications with the results
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: 'Email address to receive test results'
+        required: true
+        default: 'your-team@example.com'
+        type: string
+
+# Set timeout for the entire workflow (5 minutes)
+jobs:
+  test:
+    name: Run Playwright Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      # Step 1: Checkout the repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Step 2: Setup Node.js environment (version 18)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      # Step 3: Install project dependencies
+      - name: Install dependencies
+        run: npm install
+      
+      # Step 4: Install Playwright browsers
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+      
+      # Step 5: Run Playwright tests
+      - name: Run tests
+        id: test-run
+        continue-on-error: true
+        run: |
+          npx playwright test
+          echo "TEST_EXIT_CODE=$?" >> $GITHUB_OUTPUT
+      
+      # Step 6: Generate test summary for email
+      - name: Generate test summary
+        id: test-summary
+        if: always()
+        run: |
+          # Check if test results file exists
+          if [ -f "test-results.json" ]; then
+            # Parse test results
+            TOTAL=$(jq '.suites[].specs | length' test-results.json | awk '{s+=$1} END {print s}')
+            PASSED=$(jq '[.suites[].specs[].tests[] | select(.status=="expected")] | length' test-results.json)
+            FAILED=$(jq '[.suites[].specs[].tests[] | select(.status=="unexpected")] | length' test-results.json)
+            
+            echo "TOTAL_TESTS=$TOTAL" >> $GITHUB_OUTPUT
+            echo "PASSED_TESTS=$PASSED" >> $GITHUB_OUTPUT
+            echo "FAILED_TESTS=$FAILED" >> $GITHUB_OUTPUT
+            
+            # Generate detailed results
+            echo "TEST_DETAILS<<EOF" >> $GITHUB_OUTPUT
+            jq -r '.suites[].specs[] | "\(.title): \(.tests[0].status)"' test-results.json >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            
+            # Get failure details if any
+            if [ "$FAILED" -gt 0 ]; then
+              echo "FAILURE_DETAILS<<EOF" >> $GITHUB_OUTPUT
+              jq -r '.suites[].specs[] | select(.tests[0].status=="unexpected") | "❌ \(.title)\n   Error: \(.tests[0].results[0].error.message // "Unknown error")\n"' test-results.json >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "TOTAL_TESTS=0" >> $GITHUB_OUTPUT
+            echo "PASSED_TESTS=0" >> $GITHUB_OUTPUT
+            echo "FAILED_TESTS=0" >> $GITHUB_OUTPUT
+            echo "TEST_DETAILS=No test results found" >> $GITHUB_OUTPUT
+            echo "FAILURE_DETAILS=Test execution failed before generating results" >> $GITHUB_OUTPUT
+          fi
+      
+      # Step 7: Upload test report as artifact (available even if tests fail)
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 30
+      
+      # Step 8: Upload test results JSON
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.json
+          retention-days: 30
+      
+      # Step 9: Determine test status for email subject
+      - name: Set test status
+        id: test-status
+        if: always()
+        run: |
+          if [ "${{ steps.test-run.outcome }}" == "success" ]; then
+            echo "STATUS=PASSED" >> $GITHUB_OUTPUT
+            echo "EMOJI=✅" >> $GITHUB_OUTPUT
+          else
+            echo "STATUS=FAILED" >> $GITHUB_OUTPUT
+            echo "EMOJI=🚨" >> $GITHUB_OUTPUT
+          fi
+      
+      # Step 10: Send email notification with test results
+      - name: Send email notification
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          # SMTP configuration for Gmail
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          
+          # Credentials from GitHub Secrets
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_PASSWORD }}
+          
+          # Email details
+          subject: "[TEST RESULTS] Sitecore Landing Page - ${{ steps.test-status.outputs.STATUS }}"
+          to: ${{ github.event.inputs.email }}
+          from: ${{ secrets.GMAIL_USERNAME }}
+          
+          # Email body with test results
+          html_body: |
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                .header { background-color: #f4f4f4; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
+                .status-passed { color: #28a745; font-weight: bold; font-size: 24px; }
+                .status-failed { color: #dc3545; font-weight: bold; font-size: 24px; }
+                .summary { background-color: #e9ecef; padding: 15px; border-radius: 5px; margin: 20px 0; }
+                .test-list { margin: 20px 0; }
+                .test-item { padding: 5px 0; }
+                .failure-details { background-color: #f8d7da; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #dc3545; }
+                .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; }
+                .button { display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin: 10px 0; }
+              </style>
+            </head>
+            <body>
+              <div class="header">
+                <h1>${{ steps.test-status.outputs.EMOJI }} Sitecore Website Test Results</h1>
+                <p class="status-${{ steps.test-run.outcome }}">Status: ${{ steps.test-status.outputs.STATUS }}</p>
+              </div>
+              
+              <div class="summary">
+                <h2>📊 Test Summary</h2>
+                <ul>
+                  <li><strong>Total Tests:</strong> ${{ steps.test-summary.outputs.TOTAL_TESTS }}</li>
+                  <li><strong>✅ Passed:</strong> ${{ steps.test-summary.outputs.PASSED_TESTS }}</li>
+                  <li><strong>❌ Failed:</strong> ${{ steps.test-summary.outputs.FAILED_TESTS }}</li>
+                  <li><strong>⏰ Execution Time:</strong> ${{ github.event.repository.updated_at }}</li>
+                  <li><strong>🌐 Browser Tested:</strong> Chrome, Firefox, Safari</li>
+                </ul>
+              </div>
+              
+              <div class="test-list">
+                <h2>📝 Test Details</h2>
+                <pre>${{ steps.test-summary.outputs.TEST_DETAILS }}</pre>
+              </div>
+              
+              ${{ steps.test-summary.outputs.FAILED_TESTS > 0 && format('<div class="failure-details"><h2>🔍 Failure Details</h2><pre>{0}</pre></div>', steps.test-summary.outputs.FAILURE_DETAILS) || '' }}
+              
+              <div>
+                <h2>📄 Full Report</h2>
+                <p>Click the button below to view the complete test report with screenshots and traces:</p>
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" class="button">
+                  View Full Report on GitHub
+                </a>
+              </div>
+              
+              <div class="footer">
+                <p><strong>Test Run Information:</strong></p>
+                <ul>
+                  <li>Triggered by: ${{ github.actor }}</li>
+                  <li>Repository: ${{ github.repository }}</li>
+                  <li>Workflow: ${{ github.workflow }}</li>
+                  <li>Run ID: ${{ github.run_id }}</li>
+                  <li>Timestamp: ${{ github.event.repository.updated_at }}</li>
+                </ul>
+                <p><em>This is an automated message from the Sitecore testing system. Do not reply to this email.</em></p>
+              </div>
+            </body>
+            </html>
+          
+          # Plain text version for email clients that don't support HTML
+          body: |
+            ${{ steps.test-status.outputs.EMOJI }} SITECORE WEBSITE TEST RESULTS ${{ steps.test-status.outputs.EMOJI }}
+            
+            Status: ${{ steps.test-status.outputs.STATUS }}
+            
+            📊 TEST SUMMARY
+            ================
+            Total Tests: ${{ steps.test-summary.outputs.TOTAL_TESTS }}
+            ✅ Passed: ${{ steps.test-summary.outputs.PASSED_TESTS }}
+            ❌ Failed: ${{ steps.test-summary.outputs.FAILED_TESTS }}
+            
+            📝 TEST DETAILS
+            ================
+            ${{ steps.test-summary.outputs.TEST_DETAILS }}
+            
+            ${{ steps.test-summary.outputs.FAILED_TESTS > 0 && format('🔍 FAILURE DETAILS\n================\n{0}\n', steps.test-summary.outputs.FAILURE_DETAILS) || '' }}
+            
+            📄 FULL REPORT
+            ================
+            View the complete test report with screenshots and traces:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ---
+            Test Run Information:
+            - Triggered by: ${{ github.actor }}
+            - Repository: ${{ github.repository }}
+            - Workflow: ${{ github.workflow }}
+            - Run ID: ${{ github.run_id }}
+            - Timestamp: ${{ github.event.repository.updated_at }}
+            
+            This is an automated message from the Sitecore testing system.
