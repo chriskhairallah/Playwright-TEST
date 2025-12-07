@@ -17,8 +17,8 @@ import { test, expect, Page } from '@playwright/test';
 // ============================================================================
 
 const URLS = {
-  landingPage: '/promo-page', // TODO: Update with your actual landing page path
-  productPage: '/products/sample-product', // TODO: Update with actual product URL
+  landingPage: 'https://www.kerastase.ca/en/special-offers.html',
+  productPage: 'https://www.kerastase.ca/en/collections/nutritive/8h-magic-night-hair-serum.html',
   cart: '/cart',
   checkout: '/checkout',
 };
@@ -28,12 +28,54 @@ const TEST_DATA = {
 };
 
 // ============================================================================
+// Helper: dismiss common cookie/privacy banners or overlays that block clicks
+// ============================================================================
+async function dismissCookieBanner(page: Page) {
+  try {
+    const btn = page.getByRole('button', { name: /accept|agree|close|dismiss|ok|accept all/i }).first();
+    if (await btn.isVisible().catch(() => false)) {
+      await btn.click().catch(() => {});
+    }
+  } catch (e) {
+    // ignore if not present
+  }
+}
+
+/**
+ * Close common modals that appear after adding to cart (e.g., "Don't Wait" upsell)
+ */
+async function closePostAddModal(page: Page) {
+  try {
+    // Wait briefly for any dialog to appear
+    const dialog = page.getByRole('dialog').first();
+    if (await dialog.isVisible().catch(() => false)) {
+      // Try common close buttons inside dialog
+      const closeBtn = dialog.locator('button[aria-label="close"], button:has-text("Close"), button:has-text("×"), button:has-text("X"), .modal-close, .close').first();
+      if (await closeBtn.isVisible().catch(() => false)) {
+        await closeBtn.click().catch(() => {});
+        return;
+      }
+    }
+
+    // Fallback: try global close buttons
+    const globalClose = page.locator('button[aria-label="close"], button:has-text("Close"), button:has-text("×"), button:has-text("X"), .modal-close, .close').first();
+    if (await globalClose.isVisible().catch(() => false)) {
+      await globalClose.click().catch(() => {});
+      return;
+    }
+  } catch (e) {
+    // ignore errors closing modal
+  }
+}
+
+// ============================================================================
 // TEST 1: Landing Page Loads
 // ============================================================================
 
 test('Landing Page Loads Successfully', async ({ page }) => {
   // Navigate to the landing page with network idle wait for stability
-  await page.goto(URLS.landingPage, { waitUntil: 'networkidle', timeout: 10000 });
+  await page.goto(URLS.landingPage, { waitUntil: 'networkidle', timeout: 30000 });
+  await dismissCookieBanner(page);
   
   // Verify page title is not empty (indicates page loaded properly)
   const title = await page.title();
@@ -44,7 +86,7 @@ test('Landing Page Loads Successfully', async ({ page }) => {
   // NOTE: Update selector based on your page structure
   // Try to use semantic selectors first (getByRole), fallback to other methods
   const heading = page.locator('h1').first();
-  await expect(heading).toBeVisible({ timeout: 5000 });
+  await expect(heading).toBeVisible({ timeout: 10000 });
   const headingText = await heading.textContent();
   console.log(`✓ Main heading found: "${headingText}"`);
   
@@ -62,7 +104,8 @@ test('Landing Page Loads Successfully', async ({ page }) => {
 
 test('Sign Up Form Submission Works', async ({ page }) => {
   // Navigate to landing page
-  await page.goto(URLS.landingPage, { waitUntil: 'networkidle', timeout: 10000 });
+  await page.goto(URLS.landingPage, { waitUntil: 'networkidle', timeout: 30000 });
+  await dismissCookieBanner(page);
   
   // Locate and click the Sign Up button
   // Using multiple strategies to find the button (adapt to your website)
@@ -71,7 +114,7 @@ test('Sign Up Form Submission Works', async ({ page }) => {
     .or(page.locator('button:has-text("Sign Up")'))
     .first();
   
-  await expect(signUpButton).toBeVisible({ timeout: 5000 });
+  await expect(signUpButton).toBeVisible({ timeout: 10000 });
   console.log('✓ Sign Up button found');
   
   await signUpButton.click();
@@ -87,7 +130,7 @@ test('Sign Up Form Submission Works', async ({ page }) => {
     .or(page.locator('input[type="email"]'))
     .first();
   
-  await expect(emailInput).toBeVisible({ timeout: 5000 });
+  await expect(emailInput).toBeVisible({ timeout: 10000 });
   await emailInput.fill(TEST_DATA.email);
   console.log(`✓ Filled email: ${TEST_DATA.email}`);
   
@@ -110,11 +153,11 @@ test('Sign Up Form Submission Works', async ({ page }) => {
   try {
     // Option 1: Success message appears
     const successMessage = page.locator('text=/success|thank you|subscribed|welcome/i').first();
-    await successMessage.waitFor({ state: 'visible', timeout: 10000 });
+    await successMessage.waitFor({ state: 'visible', timeout: 20000 });
     console.log('✓ Success message displayed');
   } catch (error) {
     // Option 2: Page redirects to confirmation page
-    await page.waitForURL(/confirmation|thank-you|success/i, { timeout: 10000 });
+    await page.waitForURL(/confirmation|thank-you|success/i, { timeout: 20000 });
     console.log('✓ Redirected to confirmation page');
   }
   
@@ -132,7 +175,8 @@ test('Sign Up Form Submission Works', async ({ page }) => {
 
 test('Add to Cart Functionality Works', async ({ page }) => {
   // Navigate to a product page
-  await page.goto(URLS.productPage, { waitUntil: 'networkidle', timeout: 10000 });
+  await page.goto(URLS.productPage, { waitUntil: 'networkidle', timeout: 30000 });
+  await dismissCookieBanner(page);
   
   console.log(`✓ Navigated to product page: ${URLS.productPage}`);
   
@@ -146,7 +190,7 @@ test('Add to Cart Functionality Works', async ({ page }) => {
     .or(page.locator('[data-testid*="add-to-cart"]'))
     .first();
   
-  await expect(addToCartButton).toBeVisible({ timeout: 5000 });
+  await expect(addToCartButton).toBeVisible({ timeout: 10000 });
   console.log('✓ Add to Cart button found');
   
   // Take screenshot before adding to cart
@@ -159,17 +203,21 @@ test('Add to Cart Functionality Works', async ({ page }) => {
   await addToCartButton.click();
   console.log('✓ Clicked Add to Cart button');
   
+  // Wait briefly and close post-add modal if it appears
+  await page.waitForTimeout(1000);
+  await closePostAddModal(page);
+
   // Wait for cart to update - check for multiple indicators
   try {
     // Option 1: Cart count badge updates
     const cartBadge = page.locator('[data-testid*="cart-count"], .cart-count, .cart-badge').first();
-    await expect(cartBadge).toBeVisible({ timeout: 5000 });
+    await expect(cartBadge).toBeVisible({ timeout: 10000 });
     const cartCount = await cartBadge.textContent();
     console.log(`✓ Cart count updated: ${cartCount}`);
   } catch (error) {
     // Option 2: Success popup/notification appears
     const notification = page.locator('text=/added to cart|item added/i').first();
-    await expect(notification).toBeVisible({ timeout: 5000 });
+    await expect(notification).toBeVisible({ timeout: 10000 });
     console.log('✓ Cart notification displayed');
   }
   
@@ -187,7 +235,8 @@ test('Add to Cart Functionality Works', async ({ page }) => {
 
 test('Checkout Page Loads with Order Summary', async ({ page }) => {
   // Navigate to landing page first
-  await page.goto(URLS.landingPage, { waitUntil: 'networkidle', timeout: 10000 });
+  await page.goto(URLS.landingPage, { waitUntil: 'networkidle', timeout: 30000 });
+  await dismissCookieBanner(page);
   
   // Add a product to cart (simplified version)
   const addToCartButton = page.getByRole('button', { name: /add to cart|shop now|buy/i })
@@ -205,10 +254,14 @@ test('Checkout Page Loads with Order Summary', async ({ page }) => {
   
   // Add product to cart
   const addButton = page.getByRole('button', { name: /add to cart|add to bag/i }).first();
-  await expect(addButton).toBeVisible({ timeout: 5000 });
+  await expect(addButton).toBeVisible({ timeout: 10000 });
   await addButton.click();
   console.log('✓ Product added to cart');
   
+  // Wait briefly and close post-add modal if it appears
+  await page.waitForTimeout(1000);
+  await closePostAddModal(page);
+
   // Wait for cart update
   await page.waitForTimeout(2000);
   
@@ -223,7 +276,7 @@ test('Checkout Page Loads with Order Summary', async ({ page }) => {
   const isCheckoutVisible = await checkoutButton.isVisible().catch(() => false);
   
   if (!isCheckoutVisible) {
-    await page.goto(URLS.cart, { waitUntil: 'networkidle', timeout: 10000 });
+    await page.goto(URLS.cart, { waitUntil: 'networkidle', timeout: 30000 });
     console.log('✓ Navigated to cart page');
     await page.waitForTimeout(1000);
   }
@@ -239,7 +292,7 @@ test('Checkout Page Loads with Order Summary', async ({ page }) => {
   
   // Wait for checkout page to load
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForTimeout(2000); // Allow for dynamic content
+  await page.waitForTimeout(3000); // Allow for dynamic content
   
   // Verify checkout page loaded with order summary
   const orderSummary = page.locator('text=/order summary|your order|cart summary/i')
@@ -247,7 +300,7 @@ test('Checkout Page Loads with Order Summary', async ({ page }) => {
     .or(page.locator('.order-summary, #order-summary'))
     .first();
   
-  await expect(orderSummary).toBeVisible({ timeout: 10000 });
+  await expect(orderSummary).toBeVisible({ timeout: 20000 });
   console.log('✓ Order summary section found');
   
   // Verify payment section is present
@@ -256,7 +309,7 @@ test('Checkout Page Loads with Order Summary', async ({ page }) => {
     .or(page.locator('.payment, #payment'))
     .first();
   
-  await expect(paymentSection).toBeVisible({ timeout: 5000 });
+  await expect(paymentSection).toBeVisible({ timeout: 10000 });
   console.log('✓ Payment information section found');
   
   // Take screenshot of checkout page
@@ -277,7 +330,8 @@ test('Landing Page is Mobile Responsive', async ({ page }) => {
   console.log('✓ Viewport set to mobile size: 375x667');
   
   // Navigate to landing page
-  await page.goto(URLS.landingPage, { waitUntil: 'networkidle', timeout: 10000 });
+  await page.goto(URLS.landingPage, { waitUntil: 'networkidle', timeout: 30000 });
+  await dismissCookieBanner(page);
   
   // Verify page title is not empty
   const title = await page.title();

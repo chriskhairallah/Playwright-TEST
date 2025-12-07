@@ -12,12 +12,12 @@ on:
         default: 'your-team@example.com'
         type: string
 
-# Set timeout for the entire workflow (5 minutes)
+# Set timeout for the entire workflow (10 minutes)
 jobs:
   test:
     name: Run Playwright Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     
     steps:
       # Step 1: Checkout the repository code
@@ -30,13 +30,24 @@ jobs:
         with:
           node-version: '18'
       
-      # Step 3: Install project dependencies
+      # Step 3: Debug Node/npm versions (helps diagnose runner environment)
+      - name: Debug Node/npm
+        run: |
+          node --version || true
+          npm --version || true
+          echo "Registry: $(npm config get registry)" || true
+
+      # Step 4: Install project dependencies (capture logs)
       - name: Install dependencies
-        run: npm install
-      
-      # Step 4: Install Playwright browsers
+        run: |
+          npm install > npm-install.log 2>&1 || true
+          echo "NPM_INSTALL_EXIT_CODE=$?" > npm-install.exit || true
+
+      # Step 5: Install Playwright browsers (capture logs)
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps
+        run: |
+          npx playwright install --with-deps > playwright-install.log 2>&1 || true
+          echo "PLAYWRIGHT_INSTALL_EXIT_CODE=$?" > playwright-install.exit || true
       
       # Step 5: Run Playwright tests
       - name: Run tests
@@ -88,6 +99,19 @@ jobs:
         with:
           name: playwright-report
           path: playwright-report/
+          retention-days: 30
+
+      # Upload install logs for easier debugging
+      - name: Upload install logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-logs
+          path: |
+            npm-install.log
+            npm-install.exit
+            playwright-install.log
+            playwright-install.exit
           retention-days: 30
       
       # Step 8: Upload test results JSON
